@@ -1,0 +1,41 @@
+# vim: filetype=automake
+
+CH_DRIVER_SOURCES = \
+	ch/ch_conf.h \
+	ch/ch_conf.c \
+	ch/ch_domain.h \
+	ch/ch_domain.c \
+	ch/ch_driver.h \
+	ch/ch_driver.c \
+	ch/ch_monitor.h \
+	ch/ch_monitor.c \
+	ch/ch_process.h \
+	ch/ch_process.c \
+	$(NULL)
+
+DRIVER_SOURCE_FILES += $(CH_DRIVER_SOURCES)
+
+EXTRA_DIST += $(CH_DRIVER_SOURCES)
+
+if WITH_CH
+noinst_LTLIBRARIES += libvirt_driver_ch_impl.la
+libvirt_driver_ch_la_SOURCES =
+libvirt_driver_ch_la_LIBADD = \
+	libvirt_driver_ch_impl.la \
+	libvirt.la \
+	$(GLIB_LIBS) \
+	$(NULL)
+mod_LTLIBRARIES += libvirt_driver_ch.la
+libvirt_driver_ch_la_LDFLAGS = $(AM_LDFLAGS_MOD_NOUNDEF)
+
+libvirt_driver_ch_impl_la_CFLAGS = \
+	$(CURL_CFLAGS) \
+	-I$(srcdir)/access \
+	-I$(builddir)/access \
+	-I$(srcdir)/conf \
+	$(AM_CFLAGS) \
+	$(NULL)
+libvirt_driver_ch_impl_la_LIBADD = $(CURL_LIBS)
+libvirt_driver_ch_impl_la_LDFLAGS = $(AM_LDFLAGS)
+libvirt_driver_ch_impl_la_SOURCES = $(CH_DRIVER_SOURCES)
+endif WITH_CH
