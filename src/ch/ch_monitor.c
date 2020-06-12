@@ -194,7 +194,7 @@ cleanup:
 static int
 virCHMonitorBuildDiskJson(virJSONValuePtr disks, virDomainDiskDefPtr diskdef)
 {
-    printf("virCHMonitorBuildInitramfsJson\n");
+    printf("virCHMonitorBuildDiskJson\n");
     virJSONValuePtr disk;
 
     if (diskdef->src != NULL && diskdef->src->path != NULL) {
@@ -242,6 +242,137 @@ cleanup:
 }
 
 static int
+virCHMonitorBuildNetJson(virJSONValuePtr nets, virDomainNetDefPtr netdef)
+{
+    printf("virCHMonitorBuildNetJson\n");
+    virDomainNetType netType = virDomainNetGetActualType(netdef);
+    char macaddr[VIR_MAC_STRING_BUFLEN];
+    virJSONValuePtr net;
+
+    // check net type at first
+    net = virJSONValueNewObject();
+
+    switch (netType) {
+    case VIR_DOMAIN_NET_TYPE_ETHERNET:
+        if (netdef->guestIP.nips == 1) {
+            const virNetDevIPAddr *ip = netdef->guestIP.ips[0];
+            g_autofree char *addr = NULL;
+            virSocketAddr netmask;
+            g_autofree char *netmaskStr = NULL;
+            if (!(addr = virSocketAddrFormat(&ip->address)))
+                goto cleanup;
+            if (virJSONValueObjectAppendString(net, "ip", addr) < 0)
+                goto cleanup;
+
+            if (virSocketAddrPrefixToNetmask(ip->prefix, &netmask, AF_INET) < 0) {
+                virReportError(VIR_ERR_INTERNAL_ERROR,
+                               _("Failed to translate net prefix %d to netmask"),
+                               ip->prefix);
+                goto cleanup;
+            }
+            if (!(netmaskStr = virSocketAddrFormat(&netmask)))
+                goto cleanup;
+            if (virJSONValueObjectAppendString(net, "mask", netmaskStr) < 0)
+                goto cleanup;
+        }
+        break;
+    case VIR_DOMAIN_NET_TYPE_VHOSTUSER:
+        if ((virDomainChrType)netdef->data.vhostuser->type != VIR_DOMAIN_CHR_TYPE_UNIX) {
+            virReportError(VIR_ERR_CONFIG_UNSUPPORTED,
+                           _("vhost_user type support UNIX socket in this CH"));
+            goto cleanup;
+        } else {
+            if (virJSONValueObjectAppendString(net, "vhost_socket", netdef->data.vhostuser->data.nix.path) < 0)
+                goto cleanup;
+            if (virJSONValueObjectAppendBoolean(net, "vhost_user", true) < 0)
+                goto cleanup;
+        }
+        break;
+    case VIR_DOMAIN_NET_TYPE_BRIDGE:
+    case VIR_DOMAIN_NET_TYPE_NETWORK:
+    case VIR_DOMAIN_NET_TYPE_DIRECT:
+    case VIR_DOMAIN_NET_TYPE_USER:
+    case VIR_DOMAIN_NET_TYPE_SERVER:
+    case VIR_DOMAIN_NET_TYPE_CLIENT:
+    case VIR_DOMAIN_NET_TYPE_MCAST:
+    case VIR_DOMAIN_NET_TYPE_INTERNAL:
+    case VIR_DOMAIN_NET_TYPE_HOSTDEV:
+    case VIR_DOMAIN_NET_TYPE_UDP:
+    case VIR_DOMAIN_NET_TYPE_LAST:
+    default:
+        virReportError(VIR_ERR_CONFIG_UNSUPPORTED,
+                       _("Only ethernet and vhost_user type network types are "
+                         "supported in this CH"));
+        goto cleanup;
+    }
+
+    if (netdef->ifname != NULL) {
+        if (virJSONValueObjectAppendString(net, "tap", netdef->ifname) < 0)
+            goto cleanup;
+    }
+    if (virJSONValueObjectAppendString(net, "mac", virMacAddrFormat(&netdef->mac, macaddr)) < 0)
+        goto cleanup;
+
+
+    if (netdef->virtio != NULL) {
+        if (netdef->virtio->iommu == VIR_TRISTATE_SWITCH_ON) {
+            if (virJSONValueObjectAppendBoolean(net, "iommu", true) < 0)
+                goto cleanup;
+        }
+    }
+    if (netdef->driver.virtio.queues) {
+        if (virJSONValueObjectAppendNumberInt(net, "num_queues", netdef->driver.virtio.queues) < 0)
+            goto cleanup;
+    }
+
+    if (netdef->driver.virtio.rx_queue_size || netdef->driver.virtio.tx_queue_size) {
+        if (netdef->driver.virtio.rx_queue_size != netdef->driver.virtio.tx_queue_size) {
+            virReportError(VIR_ERR_CONFIG_UNSUPPORTED,
+               _("virtio rx_queue_size option %d is not same with tx_queue_size %d"),
+               netdef->driver.virtio.rx_queue_size,
+               netdef->driver.virtio.tx_queue_size);
+            goto cleanup;
+        }
+        if (virJSONValueObjectAppendNumberInt(net, "queue_size", netdef->driver.virtio.rx_queue_size) < 0)
+            goto cleanup;
+    }
+
+    if (virJSONValueArrayAppend(nets, net) < 0)
+        goto cleanup;
+
+    return 0;
+
+cleanup:
+    virJSONValueFree(net);
+    return -1;
+}
+
+static int
+virCHMonitorBuildNetsJson(virJSONValuePtr content, virDomainDefPtr vmdef)
+{
+    printf("virCHMonitorBuildNetsJson\n");
+    virJSONValuePtr nets;
+    size_t i;
+
+    if (vmdef->nnets > 0) {
+        nets = virJSONValueNewArray();
+
+        for (i = 0; i < vmdef->nnets; i++) {
+            if (virCHMonitorBuildNetJson(nets, vmdef->nets[i]) < 0)
+                goto cleanup;
+        }
+        if (virJSONValueObjectAppend(content, "net", nets) < 0)
+            goto cleanup;
+    }
+
+    return 0;
+
+cleanup:
+    virJSONValueFree(nets);
+    return -1;
+}
+
+static int
 virCHMonitorBuildVMJson(virDomainDefPtr vmdef, char **jsonstr)
 {
     printf("virCHMonitorBuildVMJson\n");
@@ -270,6 +401,9 @@ virCHMonitorBuildVMJson(virDomainDefPtr vmdef, char **jsonstr)
         goto cleanup;
 
     if (virCHMonitorBuildDisksJson(content, vmdef) < 0)
+        goto cleanup;
+
+    if (virCHMonitorBuildNetsJson(content, vmdef) < 0)
         goto cleanup;
 
     if (!(*jsonstr = virJSONValueToString(content, false)))
@@ -619,10 +753,10 @@ int
 virCHMonitorCreateVM(virCHMonitorPtr mon)
 {
     printf("virCHMonitorCreateVM\n");
-    char *url;
+    g_autofree char *url;
     int responseCode = 0;
     int ret = -1;
-    char *payload = NULL;
+    g_autofree char *payload = NULL;
     struct curl_slist *headers = NULL;
 
     url = g_strdup_printf("%s/%s", URL_ROOT, URL_VM_CREATE);
