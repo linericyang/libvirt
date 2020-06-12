@@ -291,24 +291,23 @@ static virCommandPtr
 chMonitorBuildSocketCmd(virDomainObjPtr vm, const char *socket_path)
 {
     printf("chMonitorBuildSocketCmd\n");
-    virCommandPtr cmd = virCommandNewArgList(CH_CMD, NULL);
+    virCommandPtr cmd;
 
-    if (vm->def == NULL)
-    {
+    if (vm->def == NULL) {
         virReportError(VIR_ERR_INTERNAL_ERROR, "%s",
                        _("VM is not defined"));
-        goto  cleanup;
+        return NULL;
     }
+
+    if (vm->def->emulator != NULL)
+        cmd = virCommandNew(vm->def->emulator);
+    else
+        cmd = virCommandNew(CH_CMD);
 
     virCommandAddArgList(cmd, "--api-socket", socket_path, NULL);
 
     printf("CMD %s\n", virCommandToString(cmd, false));
-
     return cmd;
-
- cleanup:
-    virCommandFree(cmd);
-    return NULL;
 }
 
 virCHMonitorPtr
